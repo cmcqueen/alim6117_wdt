@@ -24,7 +24,7 @@
  *   programming.
  **/
 
-#define ALI_WDT_VERSION "0.01c"
+#define ALI_WDT_VERSION "0.2.0"
 
 #include <linux/module.h>
 #include <linux/miscdevice.h>
@@ -81,23 +81,19 @@
 /* ALI_WD_TIME_FACTOR is 1000000/30.5 */
 #define ALI_WD_TIME_FACTOR 32787	/* (from seconds to ALi counter) */
 
-#ifdef CONFIG_WATCHDOG_NOWAYOUT
-static int nowayout = 1;
-#else
-static int nowayout = 0;
-#endif
-
 static unsigned long wdt_is_open;
 static char ali_expect_close;
-static int wdt_timeout = 60;
 static int wdt_run = 0;
 
 
-MODULE_PARM(nowayout, "i");
-MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started (default=CONFIG_WATCHDOG_NOWAYOUT)");
+static bool nowayout = WATCHDOG_NOWAYOUT;
+module_param(nowayout, bool, 0);
+MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started "
+	"(default=" __MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
 
-MODULE_PARM(wdt_timeout, "i");
-MODULE_PARM_DESC(wdt_timeout,"Watchdog timeout in seconds");
+static unsigned wdt_timeout = 60;
+module_param(wdt_timeout, int, 0);
+MODULE_PARM_DESC(wdt_timeout, "initial watchdog timeout (in seconds)");
 
 
 static int alim6117_read(int index)
@@ -278,7 +274,7 @@ static ssize_t ali_write(struct file *file, const char *data,
  *      Handle the watchdog ioctls supported by the ALi driver.
  */
 
-static int ali_ioctl(struct inode *inode, struct file *file,
+static long ali_ioctl(struct file *file,
 		     unsigned int cmd, unsigned long arg)
 {
 	int options;
@@ -374,7 +370,7 @@ static int ali_release(struct inode *inode, struct file *file)
 static struct file_operations ali_fops = {
 	.owner          = THIS_MODULE,
 	.write          = ali_write,
-	.ioctl          = ali_ioctl,
+	.unlocked_ioctl = ali_ioctl,
 	.open           = ali_open,
 	.release        = ali_release,
 };
@@ -433,5 +429,3 @@ MODULE_AUTHOR("Federico Bareilles <fede@fcaglp.unlp.edu.ar>");
 MODULE_DESCRIPTION("Driver for watchdog timer in ALi M6117 chip.");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("watchdog");
-
-EXPORT_NO_SYMBOLS;
