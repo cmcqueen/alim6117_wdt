@@ -24,18 +24,17 @@
  *   programming.
  **/
 
-#define ALI_WDT_VERSION "0.2.0"
+#define ALI_WDT_VERSION "0.3.0"
 
 #include <linux/module.h>
-#include <linux/miscdevice.h>
 #include <linux/watchdog.h>
 #include <asm/io.h>
-#include <asm/uaccess.h>
 #include <linux/reboot.h>
 #include <linux/init.h>
-#include <linux/proc_fs.h>
 
 #define OUR_NAME "alim6117_wdt"
+
+#define TIMEOUT_DEFAULT		60
 
 /* Port definitions: */
 #define M6117_PORT_INDEX 0x22
@@ -81,20 +80,22 @@
 /* ALI_WD_TIME_FACTOR is 1000000/30.5 */
 #define ALI_WD_TIME_FACTOR 32787	/* (from seconds to ALi counter) */
 
-static unsigned long wdt_is_open;
-static char ali_expect_close;
 static int wdt_run = 0;
-
 
 static bool nowayout = WATCHDOG_NOWAYOUT;
 module_param(nowayout, bool, 0);
 MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started "
 	"(default=" __MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
 
-static unsigned wdt_timeout = 60;
-module_param(wdt_timeout, int, 0);
-MODULE_PARM_DESC(wdt_timeout, "initial watchdog timeout (in seconds)");
+static unsigned timeout = TIMEOUT_DEFAULT;
+module_param(timeout, int, 0);
+MODULE_PARM_DESC(timeout, "Initial watchdog timeout in seconds "
+	"(default=" __MODULE_STRING(TIMEOUT_DEFAULT) ")");
 
+static bool early_enable;
+module_param(early_enable, bool, 0);
+MODULE_PARM_DESC(early_enable,
+	"Watchdog is started on module insertion (default=0)");
 
 static int alim6117_read(int index)
 {
@@ -172,11 +173,11 @@ static void ali_wdt_ping(void)
 		printk(KERN_INFO OUR_NAME ": WDT ping...\n");
 		*/
 	} else { 
-		printk(KERN_WARNING OUR_NAME ": WDT is stopped\n");
+		printk(KERN_WARNING OUR_NAME ": Watchdog is stopped\n");
 	}
 }
 
-static void ali_wdt_start(void)
+static void ali_wdt_start(unsigned int wdt_timeout)
 {
 	alim6117_ulock_conf_register();
 	alim6117_wdt_disable();
@@ -225,160 +226,54 @@ static int ali_wdt_notify_sys(struct notifier_block *this,
 	return NOTIFY_DONE;
 }
 
-/**
- *      ali_write       -       writes to ALi watchdog
- *      @file: file handle to the watchdog
- *      @data: user address of data
- *      @len: length of data
- *      @ppos: pointer to the file offset
- *
- *      Handle a write to the ALi watchdog. Writing to the file pings
- *      the watchdog and resets it. Writing the magic 'V' sequence allows
- *      the next close to turn off the watchdog.
- */
-
-static ssize_t ali_write(struct file *file, const char *data,
-			 size_t len, loff_t * ppos)
+static int ali_m6117_wdt_start(struct watchdog_device *wdog)
 {
-	/*  Can't seek (pwrite) on this device  */
-	if (ppos != &file->f_pos)
-		return -ESPIPE;
-
-	/* Check if we've got the magic character 'V' and reload the timer */
-	if (len) {
-		size_t i;
-
-		ali_expect_close = 0;
-
-		/* scan to see wether or not we got the magic character */
-		for (i = 0; i != len; i++) {
-			u8 c;
-			if (get_user(c, data + i))
-				return -EFAULT;
-			if (c == 'V')
-				ali_expect_close = 42;
-		}
-		ali_wdt_ping();
-		return 1;
-	}
-	return 0;
-}
-
-/**
- *      ali_ioctl       -       handle watchdog ioctls
- *      @inode: inode of the device
- *      @file: file handle to the device
- *      @cmd: watchdog command
- *      @arg: argument pointer
- *
- *      Handle the watchdog ioctls supported by the ALi driver.
- */
-
-static long ali_ioctl(struct file *file,
-		     unsigned int cmd, unsigned long arg)
-{
-	int options;
-
-	static struct watchdog_info ident = {
-		.options          = WDIOF_KEEPALIVEPING | WDIOF_SETTIMEOUT,
-		.firmware_version = 0,
-		.identity         = "ALi M6117 WDT",
-	};
-	
-	switch (cmd) {
-	case WDIOC_KEEPALIVE:
-		ali_wdt_ping();
-		return 0;
-	case WDIOC_SETTIMEOUT:
-		if (get_user(options, (int *) arg))
-			return -EFAULT;
-		if (options < 1 || options > 512)
-			return -EFAULT;
-		wdt_timeout = options;
-		ali_wdt_start();
-	case WDIOC_GETTIMEOUT:
-		return put_user(wdt_timeout, (int *) arg);
-	case WDIOC_GETSUPPORT:
-		if (copy_to_user
-		    ((struct watchdog_info *) arg, &ident, sizeof(ident)))
-			return -EFAULT;
-		return 0;
-	case WDIOC_GETSTATUS:
-	case WDIOC_GETBOOTSTATUS:
-		return put_user(0, (int *) arg);
-	case WDIOC_SETOPTIONS:
-		if (get_user(options, (int *) arg))
-			return -EFAULT;
-		if (options & WDIOS_DISABLECARD) {
-			ali_wdt_stop();
-			return 0;
-		}
-		if (options & WDIOS_ENABLECARD) {
-			ali_wdt_start();
-			return 0;
-		}
-		return -EINVAL;
-
-	default:
-		return -ENOTTY;
-
-	}
-}
-
-/**
- *      ali_open        -       handle open of ali watchdog
- *      @inode: inode of device
- *      @file: file handle to device
- *
- *      Open the ALi watchdog device. Ensure only one person opens it
- *      at a time. Also start the watchdog running.
- */
-
-static int ali_open(struct inode *inode, struct file *file)
-{
-	if(test_and_set_bit(0, &wdt_is_open))
-                return -EBUSY;
-	ali_wdt_start();
+	ali_wdt_start(wdog->timeout);
 
 	return 0;
 }
 
-/**
- *      ali_release     -       close an ALi watchdog
- *      @inode: inode from VFS
- *      @file: file from VFS
- *
- *      Close the ALi watchdog device. Actual shutdown of the timer
- *      only occurs if the magic sequence has been set or nowayout is 
- *      disabled.
- */
-
-static int ali_release(struct inode *inode, struct file *file)
+static int ali_m6117_wdt_stop(struct watchdog_device *wdog)
 {
-	if (ali_expect_close == 42 && !nowayout) {
-		ali_wdt_stop();
-	} else {
-		printk(KERN_CRIT OUR_NAME
-		       ": Unexpected close, not stopping watchdog!\n");
-	}
-	ali_expect_close = 0;
-	clear_bit(0, &wdt_is_open);
+	ali_wdt_stop();
 
 	return 0;
 }
 
-static struct file_operations ali_fops = {
-	.owner          = THIS_MODULE,
-	.write          = ali_write,
-	.unlocked_ioctl = ali_ioctl,
-	.open           = ali_open,
-	.release        = ali_release,
+static int ali_m6117_wdt_ping(struct watchdog_device *wdog)
+{
+	ali_wdt_ping();
+
+	return 0;
+}
+
+static int ali_m6117_wdt_set_timeout(struct watchdog_device *wdog,
+				unsigned int wdt_timeout)
+{
+	ali_wdt_start(wdt_timeout);
+
+	return 0;
+}
+
+static struct watchdog_info ali_wdt_info = {
+	.options          = WDIOF_KEEPALIVEPING | WDIOF_MAGICCLOSE | WDIOF_SETTIMEOUT,
+	.identity         = "ALi M6117 Watchdog",
 };
 
-static struct miscdevice ali_miscdev = {
-	.minor          = WATCHDOG_MINOR,
-	.name           = "watchdog",
-	.fops           = &ali_fops,
+static const struct watchdog_ops ali_wdt_ops = {
+	.owner		= THIS_MODULE,
+	.start		= ali_m6117_wdt_start,
+	.stop		= ali_m6117_wdt_stop,
+	.ping		= ali_m6117_wdt_ping,
+	.set_timeout	= ali_m6117_wdt_set_timeout,
+};
+
+static struct watchdog_device ali_m6117_wdt = {
+	.info = &ali_wdt_info,
+	.ops = &ali_wdt_ops,
+	.min_timeout = 1,
+	.max_timeout = 512,
+	.timeout = TIMEOUT_DEFAULT,
 };
 
 /*
@@ -394,30 +289,37 @@ static struct notifier_block ali_notifier = {
 
 static int __init alim6117_init(void)
 {
-	if (wdt_timeout < 1 || wdt_timeout > 512){
-		printk(KERN_ERR OUR_NAME
-		       ": Timeout out of range (0 < wdt_timeout <= 512)\n");
-		return -EIO;
-	}
+	int ret;
 
-	if (misc_register(&ali_miscdev) != 0) {
+	printk(KERN_INFO "Watchdog driver for ALi M6117 v"
+	       ALI_WDT_VERSION " initialising.\n");
+
+	ret = watchdog_init_timeout(&ali_m6117_wdt, timeout, NULL);
+	if (ret < 0)
+		return ret;
+
+	watchdog_set_nowayout(&ali_m6117_wdt, nowayout);
+
+	ret = watchdog_register_device(&ali_m6117_wdt);
+	if (ret != 0) {
 		printk(KERN_ERR OUR_NAME
-		       ": cannot register watchdog device node.\n");
+		       ": cannot register watchdog device.\n");
 		return -EIO;
 	}
 
 	register_reboot_notifier(&ali_notifier);
 
-	printk(KERN_INFO "WDT driver for ALi M6117 v(" 
-	       ALI_WDT_VERSION ") initialising.\n");
+	if (early_enable)
+		ali_wdt_start(ali_m6117_wdt.timeout);
 
 	return 0;
 }
 
 static void __exit alim6117_exit(void)
 {
-	misc_deregister(&ali_miscdev);
 	unregister_reboot_notifier(&ali_notifier);
+
+	watchdog_unregister_device(&ali_m6117_wdt);
 
 	ali_wdt_stop();		/* Stop the timer */
 }
@@ -429,3 +331,4 @@ MODULE_AUTHOR("Federico Bareilles <fede@fcaglp.unlp.edu.ar>");
 MODULE_DESCRIPTION("Driver for watchdog timer in ALi M6117 chip.");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("watchdog");
+MODULE_VERSION(ALI_WDT_VERSION);
