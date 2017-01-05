@@ -179,6 +179,7 @@ static void ali_wdt_ping(void)
 
 static void ali_wdt_start(unsigned int wdt_timeout)
 {
+        /* printk(KERN_INFO "ALi M6117 calling alim6117_set_timeout with %u \n", wdt_timeout); */
 	alim6117_ulock_conf_register();
 	alim6117_wdt_disable();
 	alim6117_set_timeout(wdt_timeout);
@@ -250,8 +251,8 @@ static int ali_m6117_wdt_ping(struct watchdog_device *wdog)
 static int ali_m6117_wdt_set_timeout(struct watchdog_device *wdog,
 				unsigned int wdt_timeout)
 {
+        wdog->timeout = wdt_timeout;
 	ali_wdt_start(wdt_timeout);
-
 	return 0;
 }
 
