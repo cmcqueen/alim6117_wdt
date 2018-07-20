@@ -24,7 +24,7 @@
  *   programming.
  **/
 
-#define ALI_WDT_VERSION "0.3.0"
+#define ALI_WDT_VERSION "0.3.1"
 
 #include <linux/module.h>
 #include <linux/watchdog.h>
